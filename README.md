@@ -1,4 +1,4 @@
-# nan-moonlite-clone
+# nano-moonlite-clone
 
 A moonlite focuser clone with temperature compensation based on arduino nano 28BYJ-48 stepper and temp probe.
 Compatible with INDI and ASCOM based systems.
