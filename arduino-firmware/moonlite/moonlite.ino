@@ -27,7 +27,7 @@ DallasTemperature sensors(&oneWire);
 AccelStepper stepper = AccelStepper(MotorInterfaceType, motorPin1, motorPin3, motorPin2, motorPin4);
 
 #define HOMEPOSITION 20000
-#define MAXSPEED 500
+#define MAXSPEED 1000
 #define SPEEDMULT 3
 #define MAXCOMMAND 8
 #define BACKLASHSTEPS 27 // determined by experiment. 
@@ -54,7 +54,7 @@ long millisLastMove = 0;
 long millisLastTempRead = 0;
 float lastTemperatureReading = 0;
 float lastMotorMoveTemperatureReading = 0;
-float tempDeltaToTriggerCompensation = 0.25;
+float tempDeltaToTriggerCompensation = 0.20;
 int tempCoefficient = 0; //+-63
 bool tempCompEnabled = true;
 
@@ -102,9 +102,9 @@ void loop()
     }
     else {
       // reported on INDI forum that some steppers "stutter" if disableOutputs is done repeatedly
-      // over a short interval; hence we only disable the outputs and release the motor some seconds
+      // over a short interval; hence we only disable the outputs and release the motor 1/4 second
       // after movement has stopped
-      if ((millis() - millisLastMove) > 1000) {
+      if ((millis() - millisLastMove) > 250) {
         stepper.disableOutputs();
       }
     }
@@ -336,7 +336,7 @@ void readTempSensor() {
 void applyTemperatureCompensation() {
   double delta = lastMotorMoveTemperatureReading - lastTemperatureReading;
   if (abs(delta) >= tempDeltaToTriggerCompensation && abs(delta) < 50.00) {
-    long offset = (delta * tempCoefficient * 2) + stepper.currentPosition();
+    long offset = (delta * tempCoefficient * 10) + stepper.currentPosition();
     moveMotorToPosition(offset);
     isRunning = 1;
     stepper.enableOutputs();
