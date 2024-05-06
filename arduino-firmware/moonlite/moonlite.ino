@@ -336,7 +336,7 @@ void readTempSensor() {
 void applyTemperatureCompensation() {
   double delta = lastMotorMoveTemperatureReading - lastTemperatureReading;
   if (abs(delta) >= tempDeltaToTriggerCompensation && abs(delta) < 50.00) {
-    long offset = (delta * tempCoefficient * 10) + stepper.currentPosition();
+    long offset = (delta * tempCoefficient * 130) + stepper.currentPosition(); //130=multiplier to expand range of coefficient
     moveMotorToPosition(offset);
     isRunning = 1;
     stepper.enableOutputs();
