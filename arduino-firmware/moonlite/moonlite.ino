@@ -4,6 +4,8 @@
 / (c) 2024 GPL V2
 /
 / Designed to work with INDI but should work with ascom.
+/ Developed for sparkfun 'big easy driver' board and nema17 stepper motor.
+/ See https://learn.sparkfun.com/tutorials/big-easy-driver-hookup-guide/all for more details
 /
 */
 #include <AccelStepper.h>
@@ -12,25 +14,25 @@
 #include <EEPROM.h>
 
 // Motor pin definitions:
-#define motorPin1  2      // IN1 on the ULN2003 driver
-#define motorPin2  3      // IN2 on the ULN2003 driver
-#define motorPin3  4     // IN3 on the ULN2003 driver
-#define motorPin4  5     // IN4 on the ULN2003 driver
+#define STEP_PIN 2
+#define DIR_PIN 3
+#define MS1_PIN 4
+#define MS2_PIN 5
+#define MS3_PIN 7
+#define ENABLE_PIN  8
+// temp probe pin
 #define ONE_WIRE_BUS 6
+
+// Define the AccelStepper interface type; 1 - DRIVER. Define all pins to driver board.
+#define MotorInterfaceType 1
+#define HOMEPOSITION 20000
+#define MAXSPEED 2000
+#define MAXCOMMAND 8
+#define BACKLASHSTEPS 0 // determined by experiment. 
+
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-
-// Define the AccelStepper interface type; 4 wire motor in half step mode:
-#define MotorInterfaceType 8
-
-// Initialize with pin sequence IN1-IN3-IN2-IN4 for using the AccelStepper library with 28BYJ-48 stepper motor:
-AccelStepper stepper = AccelStepper(MotorInterfaceType, motorPin1, motorPin3, motorPin2, motorPin4);
-
-#define HOMEPOSITION 20000
-#define MAXSPEED 1000
-#define SPEEDMULT 3
-#define MAXCOMMAND 8
-#define BACKLASHSTEPS 27 // determined by experiment. 
+AccelStepper stepper(MotorInterfaceType, STEP_PIN, DIR_PIN);
 
 // EEPROM @ mapping. This is used on a cold start. Config settings saved and pos+temp from last known move. 
 // These values allow the focuser to do a temp compensation move at the beginning of a night on powerup 
@@ -42,7 +44,7 @@ AccelStepper stepper = AccelStepper(MotorInterfaceType, motorPin1, motorPin3, mo
 char inChar;
 char cmd[MAXCOMMAND];
 char param[MAXCOMMAND];
-char line[MAXCOMMAND];
+char incomingCommand[MAXCOMMAND];
 // long pos;
 int isRunning = 0;
 int previousDirection = 0;
@@ -61,12 +63,8 @@ bool tempCompEnabled = true;
 void setup()
 {
   Serial.begin(9600);
-  stepper.setMaxSpeed(MAXSPEED);
-  stepper.setSpeed(MAXSPEED);
-  stepper.setAcceleration(MAXSPEED * .75);
-  stepper.enableOutputs();
-  stepper.setCurrentPosition(HOMEPOSITION);
-  memset(line, 0, MAXCOMMAND);
+  configureBigEasyStepperDriver();
+  memset(incomingCommand, 0, MAXCOMMAND);
   millisLastMove = millis();
   sensors.begin(); 
   readTempSensor();
@@ -77,7 +75,7 @@ void setup()
   
   long savedPos;
   EEPROM.get(CUR_POS, savedPos);
-  if (savedPos > 1000 && savedPos < 30000) {
+  if (savedPos > 1000 && savedPos < 50000) {
     stepper.setCurrentPosition(savedPos);
   }
   float savedTemp;
@@ -90,79 +88,40 @@ void setup()
   }
 }
 
-
-void loop()
-{
-  // run the stepper if there's no pending command and if there are pending movements
+/**
+ * Main loop. This will execute while the microcontroller has power.
+ */
+void loop() {
   if (!Serial.available())  {
-    if (isRunning) {
-      stepper.run();
-      millisLastMove = millis();
-      lastMotorMoveTemperatureReading = lastTemperatureReading;
-    }
-    else {
-      // reported on INDI forum that some steppers "stutter" if disableOutputs is done repeatedly
-      // over a short interval; hence we only disable the outputs and release the motor 1/4 second
-      // after movement has stopped
-      if ((millis() - millisLastMove) > 250) {
-        stepper.disableOutputs();
-      }
-    }
-
-    if (stepper.distanceToGo() == 0) {
-      stepper.run();
-      isRunning = 0;
-      if (backlashApplied != 0) {
-        //The motor has moved more than requested to compensate. Now reset the position to actual requested so the driver won't get confused when it gets the new position
-        stepper.setCurrentPosition(stepper.currentPosition() - backlashApplied);
-        backlashApplied = 0;
-      }
-    }
+    runStepper();
   } else {
-    // read the command until the terminating # character
-    while (Serial.available() && !eoc) {
-      inChar = Serial.read();
-      if (inChar != '#' && inChar != ':') {
-        line[idx++] = inChar;
-        if (idx >= MAXCOMMAND) {
-          idx = MAXCOMMAND - 1;
-        }
-      }
-      else {
-        if (inChar == '#') {
-          eoc = 1;
-        }
-      }
-    }
+    handleSerialInput();
   }
+  monitorForTemperatureChanges();
+  processSerialCommand();
+}
 
-  if (millis() > millisLastTempRead + 20000 && !isRunning) {
-    //Every 20sec, get temp reading, store, apply compensation
-    millisLastTempRead = millis();
-    readTempSensor();
-    if (tempCompEnabled) {
-      applyTemperatureCompensation();
-    }
-  }
-
-  // process the command we got
+/**
+ * process the command we got and send a reply serial message
+ */
+void processSerialCommand() {
   if (eoc) {
     memset(cmd, 0, MAXCOMMAND);
     memset(param, 0, MAXCOMMAND);
 
-    int len = strlen(line);
+    int len = strlen(incomingCommand);
     if (len == 1) {
-      strncpy(cmd, line, 1);
+      strncpy(cmd, incomingCommand, 1);
     }
     if (len >= 2) {
-      strncpy(cmd, line, 2);
+      strncpy(cmd, incomingCommand, 2);
     }
 
     if (len > 2) {
-      strncpy(param, line + 2, len - 2);
+      strncpy(param, incomingCommand + 2, len - 2);
     }
 
-    memset(line, 0, MAXCOMMAND);
+    memset(incomingCommand, 0, MAXCOMMAND);
     eoc = 0;
     idx = 0;
 
@@ -294,13 +253,11 @@ void loop()
 
     // initiate a move
     if (!strcasecmp(cmd, "FG") and !isRunning) {
-      isRunning = 1;
       stepper.enableOutputs();
     }
 
     // stop a move
     if (!strcasecmp(cmd, "FQ")) {
-      isRunning = 0;
       stepper.moveTo(stepper.currentPosition());
       stepper.run();
     }
@@ -308,6 +265,8 @@ void loop()
 }
 
 void moveMotorToPosition(long pos) {
+  // stepper.moveTo(pos);
+  // 
   long curPos = stepper.currentPosition();
   if (curPos != pos) {
     int newDirection = 1;
@@ -321,14 +280,16 @@ void moveMotorToPosition(long pos) {
       }
     }
     previousDirection = newDirection;
+    stepper.enableOutputs();
     stepper.moveTo(pos);
+    lastMotorMoveTemperatureReading = lastTemperatureReading;
   }
 }
 
 void readTempSensor() {
  sensors.requestTemperatures();
  float reading = sensors.getTempCByIndex(0);
- if (reading < 100) {
+ if (reading < 40 && reading > -20) {
     lastTemperatureReading = sensors.getTempCByIndex(0);
  }
 }
@@ -336,17 +297,71 @@ void readTempSensor() {
 void applyTemperatureCompensation() {
   double delta = lastMotorMoveTemperatureReading - lastTemperatureReading;
   if (abs(delta) >= tempDeltaToTriggerCompensation && abs(delta) < 50.00) {
-    long offset = (delta * tempCoefficient * 130) + stepper.currentPosition(); //130=multiplier to expand range of coefficient
+    long offset = (delta * tempCoefficient * 4) + stepper.currentPosition(); 
     moveMotorToPosition(offset);
-    isRunning = 1;
-    stepper.enableOutputs();
     EEPROM.put(CUR_POS, offset);
     EEPROM.put(LAST_MOVE_TEMP, lastTemperatureReading);
   }
 }
 
-long hexstr2long(char *line) {
+long hexstr2long(char *hexstr) {
   long ret = 0;
-  ret = strtol(line, NULL, 16);
+  ret = strtol(hexstr, NULL, 16);
   return (ret);
+}
+
+void configureBigEasyStepperDriver() {
+  pinMode(MS1_PIN, OUTPUT);
+  pinMode(MS2_PIN, OUTPUT);
+  pinMode(MS3_PIN, OUTPUT);
+  //Set HLL for half step mode on the big-easy-driver board. LLL=full step. HLL=1/2 step, HL=1/4 step. HHL=1/8 step. HHH=1/16 step 
+  digitalWrite(MS1_PIN, HIGH);
+  digitalWrite(MS2_PIN, HIGH);
+  digitalWrite(MS3_PIN, LOW);
+  stepper.setMaxSpeed(MAXSPEED);
+  stepper.setEnablePin(ENABLE_PIN);
+  stepper.setPinsInverted(false, false, true);
+  stepper.setAcceleration(300);
+  stepper.disableOutputs();
+  stepper.setCurrentPosition(HOMEPOSITION);
+}
+
+void runStepper() {
+  if (stepper.distanceToGo() == 0) {
+    stepper.disableOutputs();
+    isRunning = 0;
+  } else {
+    isRunning = 1;
+    stepper.run();
+    millisLastMove = millis();
+    lastMotorMoveTemperatureReading = lastTemperatureReading;
+  }
+}
+
+void handleSerialInput() {
+  while (Serial.available() && !eoc) {
+    inChar = Serial.read();
+    if (inChar != '#' && inChar != ':') {
+      incomingCommand[idx++] = inChar;
+      if (idx >= MAXCOMMAND) {
+        idx = MAXCOMMAND - 1;
+      }
+    }
+    else {
+      if (inChar == '#') {
+        eoc = 1;
+      }
+    }
+  }
+}
+
+void monitorForTemperatureChanges() {
+  if (millis() > millisLastTempRead + 20000 && !isRunning) {
+    //Every 20sec, get temp reading, store, apply compensation
+    millisLastTempRead = millis();
+    readTempSensor();
+    if (tempCompEnabled) {
+      applyTemperatureCompensation();
+    }
+  }
 }
