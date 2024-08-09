@@ -19,27 +19,24 @@
 #define MS1_PIN 4
 #define MS2_PIN 5
 #define MS3_PIN 7
-#define ENABLE_PIN  8
+#define ENABLE_PIN 8
 // temp probe pin
 #define ONE_WIRE_BUS 6
 #define TEMPERATURE_POLLING_INTERVAL 20000
 
-// Define the AccelStepper interface type as 1-DRIVER. 
-#define MotorInterfaceType 1
+// Define the AccelStepper interface type as 1-DRIVER.
 #define HOMEPOSITION 20000
 #define MAXSPEED 2000
 #define MAXCOMMAND 8
-#define BACKLASHSTEPS 0 // determined by experiment. 
+#define BACKLASHSTEPS 7 // determined by experiment.
 // EPROM slots
-#define ENABLE_COMP_ADDR    0 
-#define TEMPC_ADDR          ENABLE_COMP_ADDR+sizeof(bool) //The temperature coefficient
-#define CUR_POS             TEMPC_ADDR+sizeof(int)        //Saved current motor position  
-#define LAST_MOVE_TEMP      CUR_POS+sizeof(long)          //Saved temp when motor last moved
+#define ENABLE_COMP_ADDR 0
+#define TEMPC_ADDR ENABLE_COMP_ADDR + sizeof(bool) // The temperature coefficient
+#define CUR_POS TEMPC_ADDR + sizeof(int)           // Saved current motor position
+#define LAST_MOVE_TEMP CUR_POS + sizeof(long)      // Saved temp when motor last moved
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-AccelStepper stepper(MotorInterfaceType, STEP_PIN, DIR_PIN);
-
-
+AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
 char inChar;
 char cmd[MAXCOMMAND];
@@ -48,14 +45,13 @@ char incomingCommand[MAXCOMMAND];
 int isRunning = 0;
 int previousDirection = 0;
 long backlashApplied = 0;
-int speed = 32;
+const int speedReplyConstant = 32;
 int eoc = 0;
 int idx = 0;
-long millisLastMove = 0;
 long millisLastTempRead = 0;
 float lastTemperatureReading = 0;
 float lastMotorMoveTemperatureReading = 0;
-float tempDeltaToTriggerCompensation = 0.20;
+const float tempDeltaToTriggerCompensation = 0.20;
 int tempCoefficient = 0; //+-63
 bool tempCompEnabled = true;
 
@@ -78,8 +74,7 @@ void setup()
   Serial.begin(9600);
   configureBigEasyStepperDriver();
   memset(incomingCommand, 0, MAXCOMMAND);
-  millisLastMove = millis();
-  sensors.begin(); 
+  sensors.begin();
   readTempSensor();
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
@@ -88,15 +83,18 @@ void setup()
 
   long savedPos;
   EEPROM.get(CUR_POS, savedPos);
-  if (savedPos > 1000 && savedPos < 50000) {
+  if (savedPos > 1000 && savedPos < 50000)
+  {
     stepper.setCurrentPosition(savedPos);
   }
   float savedTemp;
   EEPROM.get(LAST_MOVE_TEMP, savedTemp);
-  if (savedTemp > -50.00 && savedTemp < 50.00) {
-    lastMotorMoveTemperatureReading=savedTemp;
+  if (savedTemp > -50.00 && savedTemp < 50.00)
+  {
+    lastMotorMoveTemperatureReading = savedTemp;
   }
-  if (tempCompEnabled) {
+  if (tempCompEnabled)
+  {
     digitalWrite(LED_BUILTIN, HIGH);
   }
 }
@@ -112,10 +110,14 @@ void setup()
  *
  * @return void. This function does not return any value.
  */
-void loop() {
-  if (!Serial.available())  {
+void loop()
+{
+  if (!Serial.available())
+  {
     runStepper();
-  } else {
+  }
+  else
+  {
     handleSerialInput();
   }
   monitorForTemperatureChanges();
@@ -124,23 +126,28 @@ void loop() {
 
 /**
  * @brief Function to implement the moonlite serial protocol commandset
- * 
+ *
  * @return void. This function does not return any value.
  */
-void processMoonliteSerialCommand() {
-if (eoc) {
+void processMoonliteSerialCommand()
+{
+  if (eoc)
+  {
     memset(cmd, 0, MAXCOMMAND);
     memset(param, 0, MAXCOMMAND);
 
     int len = strlen(incomingCommand);
-    if (len == 1) {
+    if (len == 1)
+    {
       strncpy(cmd, incomingCommand, 1);
     }
-    if (len >= 2) {
+    if (len >= 2)
+    {
       strncpy(cmd, incomingCommand, 2);
     }
 
-    if (len > 2) {
+    if (len > 2)
+    {
       strncpy(param, incomingCommand + 2, len - 2);
     }
 
@@ -149,17 +156,20 @@ if (eoc) {
     idx = 0;
 
     // LED backlight value, always return "00"
-    if (!strcasecmp(cmd, "GB")) {
+    if (!strcasecmp(cmd, "GB"))
+    {
       Serial.print("00#");
     }
 
     // firmware value, always return "10"
-    if (!strcasecmp(cmd, "GV")) {
+    if (!strcasecmp(cmd, "GV"))
+    {
       Serial.print("10#");
     }
 
     // get the current motor position
-    if (!strcasecmp(cmd, "GP")) {
+    if (!strcasecmp(cmd, "GP"))
+    {
       long pos = stepper.currentPosition();
       char tempString[6];
       sprintf(tempString, "%04X", pos);
@@ -168,7 +178,8 @@ if (eoc) {
     }
 
     // get the new motor position (target)
-    if (!strcasecmp(cmd, "GN")) {
+    if (!strcasecmp(cmd, "GN"))
+    {
       long pos = stepper.targetPosition();
       char tempString[6];
       sprintf(tempString, "%04X", pos);
@@ -177,8 +188,9 @@ if (eoc) {
     }
 
     // get the current temperature. YYYY# Returns the current temperature where YYYY is a four-digit signed (2’s complement) hex number. Precision is only to 0.5 deg
-    if (!strcasecmp(cmd, "GT")) {      
-      long t_int = (long) roundf(lastTemperatureReading * 2.0);
+    if (!strcasecmp(cmd, "GT"))
+    {
+      long t_int = (long)roundf(lastTemperatureReading * 2.0);
       char tempString[6];
       sprintf(tempString, "%04lX", t_int);
       Serial.print(tempString);
@@ -186,101 +198,115 @@ if (eoc) {
     }
 
     // get the temperature coefficient
-    if (!strcasecmp(cmd, "GC")) {
+    if (!strcasecmp(cmd, "GC"))
+    {
       char tempString[4];
-	    sprintf(tempString, "%02X", tempCoefficient);
-	    Serial.print(tempString);
-	    Serial.print('#');
+      sprintf(tempString, "%02X", tempCoefficient);
+      Serial.print(tempString);
+      Serial.print('#');
     }
 
     // get the temp to log. This is not a Moonlite command. Used to collect data to manually determine coefficient
-    if (!strcasecmp(cmd, "TL")) {
+    if (!strcasecmp(cmd, "TL"))
+    {
       long savedPos;
       EEPROM.get(CUR_POS, savedPos);
       Serial.print(savedPos);
       Serial.print(",");
-      Serial.print(lastTemperatureReading,3);
+      Serial.print(lastTemperatureReading, 3);
       Serial.print(",");
       Serial.print(tempCoefficient);
     }
 
-    // get the current motor speed, speed change not supported
-    if (!strcasecmp(cmd, "GD")) {
+    // get the current motor speed, speed change not supported, just return a constant value
+    if (!strcasecmp(cmd, "GD"))
+    {
       char tempString[6];
-      sprintf(tempString, "%02X", speed);
+      sprintf(tempString, "%02X", speedReplyConstant);
       Serial.print(tempString);
       Serial.print("#");
     }
 
-    // set speed. Unsupported
-    if (!strcasecmp(cmd, "SD")) {
-      speed = hexstr2long(param);
+    // set speed. Unsupported. Just set defaults
+    if (!strcasecmp(cmd, "SD"))
+    {
       stepper.setSpeed(MAXSPEED);
       stepper.setMaxSpeed(MAXSPEED);
     }
 
     // whether half-step is enabled or not, always return "00"
-    if (!strcasecmp(cmd, "GH")) {
+    if (!strcasecmp(cmd, "GH"))
+    {
       Serial.print("00#");
     }
 
-
     // Enable Temp Comp
-    if (!strcasecmp(cmd, "+")) {
+    if (!strcasecmp(cmd, "+"))
+    {
       tempCompEnabled = true;
       digitalWrite(LED_BUILTIN, HIGH);
       EEPROM.put(ENABLE_COMP_ADDR, tempCompEnabled);
       // reset last move temp to current to prevent unexpected temp compensations
       lastMotorMoveTemperatureReading = lastTemperatureReading;
-      EEPROM.put(LAST_MOVE_TEMP, lastTemperatureReading); 
+      EEPROM.put(LAST_MOVE_TEMP, lastTemperatureReading);
     }
 
     // Disable Temp Comp
-    if (!strcasecmp(cmd, "-")) {
+    if (!strcasecmp(cmd, "-"))
+    {
       tempCompEnabled = false;
       digitalWrite(LED_BUILTIN, LOW);
       EEPROM.put(ENABLE_COMP_ADDR, tempCompEnabled);
     }
 
     // motor is moving - 01 if moving, 00 otherwise
-    if (!strcasecmp(cmd, "GI")) {
-      if (abs(stepper.distanceToGo()) > 0) {
+    if (!strcasecmp(cmd, "GI"))
+    {
+      if (abs(stepper.distanceToGo()) > 0)
+      {
         Serial.print("01#");
-      } else {
+      }
+      else
+      {
         Serial.print("00#");
       }
     }
 
     // set current motor position. :SPYYYY# Where YYYY is a 4-digit unsigned hex number
-    if (!strcasecmp(cmd, "SP")) {
+    if (!strcasecmp(cmd, "SP"))
+    {
       long pos = hexstr2long(param);
       stepper.setCurrentPosition(pos);
       EEPROM.put(CUR_POS, pos);
     }
 
     // set tempCoefficient. :SCXX# : 2 digit signed 2's complement number (range +-63)
-    if (!strcasecmp(cmd, "SC")) {
-      tempCoefficient = (int) strtol(param, NULL, 16) / 2;
-      if (tempCoefficient > 63) {
+    if (!strcasecmp(cmd, "SC"))
+    {
+      tempCoefficient = (int)strtol(param, NULL, 16) / 2;
+      if (tempCoefficient > 63)
+      {
         tempCoefficient -= 128;
-      }     
+      }
       EEPROM.put(TEMPC_ADDR, tempCoefficient);
     }
 
     // set new motor position and compensate for backlash/ :SNYYYY# Where YYYY is a 4-digit unsigned hex number
-    if (!strcasecmp(cmd, "SN") and !isRunning) {
+    if (!strcasecmp(cmd, "SN") and !isRunning)
+    {
       long pos = hexstr2long(param);
       moveMotorToPosition(pos);
     }
 
-
     // initiate a move
-    if (!strcasecmp(cmd, "FG") and !isRunning) {
+    if (!strcasecmp(cmd, "FG") and !isRunning)
+    {
       stepper.enableOutputs();
     }
 
     // stop a move
-    if (!strcasecmp(cmd, "FQ")) {
+    if (!strcasecmp(cmd, "FQ"))
+    {
       stepper.moveTo(stepper.currentPosition());
       stepper.run();
     }
@@ -304,15 +330,20 @@ if (eoc) {
  * After calculating the new position, it enables the stepper motor outputs, sets
  * the new target position, and updates the last motor move temperature reading.
  */
-void moveMotorToPosition(long pos) {
+void moveMotorToPosition(long pos)
+{
   long curPos = stepper.currentPosition();
-  if (curPos != pos) {
+  if (curPos != pos)
+  {
     int newDirection = 1;
-    if (pos < curPos) {
+    if (pos < curPos)
+    {
       newDirection = -1;
     }
-    if (previousDirection != 0) {
-      if (newDirection != previousDirection) {
+    if (previousDirection != 0)
+    {
+      if (newDirection != previousDirection)
+      {
         pos = pos + (BACKLASHSTEPS * newDirection);
         backlashApplied = BACKLASHSTEPS * newDirection;
       }
@@ -335,12 +366,14 @@ void moveMotorToPosition(long pos) {
  * a valid range (between -20 and 40 degrees Celsius) and updates the
  * lastTemperatureReading variable accordingly.
  */
-void readTempSensor() {
- sensors.requestTemperatures();
- float reading = sensors.getTempCByIndex(0);
- if (reading < 40 && reading > -20) {
+void readTempSensor()
+{
+  sensors.requestTemperatures();
+  float reading = sensors.getTempCByIndex(0);
+  if (reading < 40 && reading > -20)
+  {
     lastTemperatureReading = sensors.getTempCByIndex(0);
- }
+  }
 }
 
 /**
@@ -359,10 +392,12 @@ void readTempSensor() {
  * After applying the offset, the function updates the current motor position, the last motor move temperature reading,
  * and the saved position in the EEPROM using the EEPROM.put() function.
  */
-void applyTemperatureCompensation() {
+void applyTemperatureCompensation()
+{
   double delta = lastMotorMoveTemperatureReading - lastTemperatureReading;
-  if (abs(delta) >= tempDeltaToTriggerCompensation && abs(delta) < 50.00) {
-    long offset = (delta * tempCoefficient * 4) + stepper.currentPosition(); 
+  if (abs(delta) >= tempDeltaToTriggerCompensation && abs(delta) < 50.00)
+  {
+    long offset = (delta * tempCoefficient * 4) + stepper.currentPosition();
     moveMotorToPosition(offset);
     EEPROM.put(CUR_POS, offset);
     EEPROM.put(LAST_MOVE_TEMP, lastTemperatureReading);
@@ -388,7 +423,8 @@ void applyTemperatureCompensation() {
  * long result = hexstr2long(hexStr);
  * // result will be 4660
  */
-long hexstr2long(char *hexstr) {
+long hexstr2long(char *hexstr)
+{
   long ret = 0;
   ret = strtol(hexstr, NULL, 16);
   return (ret);
@@ -407,7 +443,7 @@ long hexstr2long(char *hexstr) {
  * HLL=1/2 step
  * HL=1/4 step
  * HHL=1/8 step
- * HHH=1/16 step 
+ * HHH=1/16 step
  *
  * @param None.
  *
@@ -417,11 +453,12 @@ long hexstr2long(char *hexstr) {
  * MS2_PIN, MS3_PIN, ENABLE_PIN) and constants (MAXSPEED, HOMEPOSITION) are
  * already defined and initialized.
  */
-void configureBigEasyStepperDriver() {
+void configureBigEasyStepperDriver()
+{
   pinMode(MS1_PIN, OUTPUT);
   pinMode(MS2_PIN, OUTPUT);
   pinMode(MS3_PIN, OUTPUT);
-  
+
   digitalWrite(MS1_PIN, HIGH);
   digitalWrite(MS2_PIN, HIGH);
   digitalWrite(MS3_PIN, LOW);
@@ -438,23 +475,26 @@ void configureBigEasyStepperDriver() {
  *
  * This function checks the distance to go using the stepper's distanceToGo() method.
  * If the distance is zero, it disables the stepper motor outputs and sets the isRunning flag to 0.
- * Otherwise, it sets the isRunning flag to 1, runs the stepper motor, updates the millisLastMove variable,
+ * Otherwise, it sets the isRunning flag to 1, runs the stepper motor
  * and stores the current temperature reading in the lastMotorMoveTemperatureReading variable.
  *
  * @param None.
  *
  * @return None.
  *
- * @note This function assumes that the stepper, millisLastMove, lastTemperatureReading, and isRunning variables are already initialized and accessible.
+ * @note This function assumes that the stepper, lastTemperatureReading, and isRunning variables are already initialized and accessible.
  */
-void runStepper() {
-  if (stepper.distanceToGo() == 0) {
+void runStepper()
+{
+  if (stepper.distanceToGo() == 0)
+  {
     stepper.disableOutputs();
     isRunning = 0;
-  } else {
+  }
+  else
+  {
     isRunning = 1;
     stepper.run();
-    millisLastMove = millis();
     lastMotorMoveTemperatureReading = lastTemperatureReading;
   }
 }
@@ -473,17 +513,23 @@ void runStepper() {
  *
  * @note This function assumes that the 'Serial', 'incomingCommand', 'idx', and 'eoc' variables are already initialized and accessible.
  */
-void handleSerialInput() {
-  while (Serial.available() && !eoc) {
+void handleSerialInput()
+{
+  while (Serial.available() && !eoc)
+  {
     inChar = Serial.read();
-    if (inChar != '#' && inChar != ':') {
+    if (inChar != '#' && inChar != ':')
+    {
       incomingCommand[idx++] = inChar;
-      if (idx >= MAXCOMMAND) {
+      if (idx >= MAXCOMMAND)
+      {
         idx = MAXCOMMAND - 1;
       }
     }
-    else {
-      if (inChar == '#') {
+    else
+    {
+      if (inChar == '#')
+      {
         eoc = 1;
       }
     }
@@ -505,12 +551,15 @@ void handleSerialInput() {
  * @note This function assumes that the 'millis', 'millisLastTempRead', 'TEMPERATURE_POLLING_INTERVAL',
  * 'isRunning', 'readTempSensor()', and 'tempCompEnabled' variables are already initialized and accessible.
  */
-void monitorForTemperatureChanges() {
-  if (millis() > millisLastTempRead + TEMPERATURE_POLLING_INTERVAL && !isRunning) {
+void monitorForTemperatureChanges()
+{
+  if (millis() > millisLastTempRead + TEMPERATURE_POLLING_INTERVAL && !isRunning)
+  {
     // Every 20sec, get temp reading, store, apply compensation
     millisLastTempRead = millis();
     readTempSensor();
-    if (tempCompEnabled) {
+    if (tempCompEnabled)
+    {
       applyTemperatureCompensation();
     }
   }
