@@ -22,30 +22,29 @@
 #define ENABLE_PIN  8
 // temp probe pin
 #define ONE_WIRE_BUS 6
+#define TEMPERATURE_POLLING_INTERVAL 20000
 
-// Define the AccelStepper interface type; 1 - DRIVER. Define all pins to driver board.
+// Define the AccelStepper interface type as 1-DRIVER. 
 #define MotorInterfaceType 1
 #define HOMEPOSITION 20000
 #define MAXSPEED 2000
 #define MAXCOMMAND 8
 #define BACKLASHSTEPS 0 // determined by experiment. 
-
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature sensors(&oneWire);
-AccelStepper stepper(MotorInterfaceType, STEP_PIN, DIR_PIN);
-
-// EEPROM @ mapping. This is used on a cold start. Config settings saved and pos+temp from last known move. 
-// These values allow the focuser to do a temp compensation move at the beginning of a night on powerup 
+// EPROM slots
 #define ENABLE_COMP_ADDR    0 
 #define TEMPC_ADDR          ENABLE_COMP_ADDR+sizeof(bool) //The temperature coefficient
 #define CUR_POS             TEMPC_ADDR+sizeof(int)        //Saved current motor position  
 #define LAST_MOVE_TEMP      CUR_POS+sizeof(long)          //Saved temp when motor last moved
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+AccelStepper stepper(MotorInterfaceType, STEP_PIN, DIR_PIN);
+
+
 
 char inChar;
 char cmd[MAXCOMMAND];
 char param[MAXCOMMAND];
 char incomingCommand[MAXCOMMAND];
-// long pos;
 int isRunning = 0;
 int previousDirection = 0;
 long backlashApplied = 0;
@@ -60,6 +59,20 @@ float tempDeltaToTriggerCompensation = 0.20;
 int tempCoefficient = 0; //+-63
 bool tempCompEnabled = true;
 
+/**
+ * @brief Initializes the microcontroller and sets up the necessary components.
+ *
+ * This function sets up the serial communication, configures the Big Easy Stepper Driver,
+ * initializes variables, and reads the temperature sensor. It also checks the saved
+ * settings in the EEPROM and applies the necessary configurations.
+ *
+ * @param None.
+ *
+ * @return void. This function does not return any value.
+ *
+ * @note The function assumes that the necessary board pin definitions, constants,
+ * and libraries (like DallasTemperature) are already included and initialized.
+ */
 void setup()
 {
   Serial.begin(9600);
@@ -72,7 +85,7 @@ void setup()
   digitalWrite(LED_BUILTIN, LOW);
   EEPROM.get(ENABLE_COMP_ADDR, tempCompEnabled);
   EEPROM.get(TEMPC_ADDR, tempCoefficient);
-  
+
   long savedPos;
   EEPROM.get(CUR_POS, savedPos);
   if (savedPos > 1000 && savedPos < 50000) {
@@ -89,7 +102,15 @@ void setup()
 }
 
 /**
- * Main loop. This will execute while the microcontroller has power.
+ * @brief The main loop of the program. This function handles the execution of various tasks.
+ *
+ * The loop continuously checks for serial input and performs the following tasks:
+ * 1. If there is no available serial input, it runs the stepper motor using the runStepper() function.
+ * 2. If there is available serial input, it handles the input using the handleSerialInput() function.
+ * 3. It monitors for temperature changes and applies compensation if enabled using the monitorForTemperatureChanges() function.
+ * 4. It processes any received serial commands using the processSerialCommand() function.
+ *
+ * @return void. This function does not return any value.
  */
 void loop() {
   if (!Serial.available())  {
@@ -98,14 +119,16 @@ void loop() {
     handleSerialInput();
   }
   monitorForTemperatureChanges();
-  processSerialCommand();
+  processMoonliteSerialCommand();
 }
 
 /**
- * process the command we got and send a reply serial message
+ * @brief Function to implement the moonlite serial protocol commandset
+ * 
+ * @return void. This function does not return any value.
  */
-void processSerialCommand() {
-  if (eoc) {
+void processMoonliteSerialCommand() {
+if (eoc) {
     memset(cmd, 0, MAXCOMMAND);
     memset(param, 0, MAXCOMMAND);
 
@@ -201,7 +224,7 @@ void processSerialCommand() {
       Serial.print("00#");
     }
 
-    
+
     // Enable Temp Comp
     if (!strcasecmp(cmd, "+")) {
       tempCompEnabled = true;
@@ -264,9 +287,24 @@ void processSerialCommand() {
   }
 }
 
+/**
+ * This function is responsible for moving the motor to the specified position,
+ * taking into account the backlash compensation and temperature compensation.
+ *
+ * @param pos The target position to move the motor to.
+ *
+ * @return void. This function does not return any value.
+ *
+ * @note The function checks if the current position is different from the target
+ * position. If they are different, it calculates the new direction based on the
+ * target position and compares it with the previous direction. If the directions
+ * are different, it applies backlash compensation by adding or subtracting the
+ * backlash steps to the target position.
+ *
+ * After calculating the new position, it enables the stepper motor outputs, sets
+ * the new target position, and updates the last motor move temperature reading.
+ */
 void moveMotorToPosition(long pos) {
-  // stepper.moveTo(pos);
-  // 
   long curPos = stepper.currentPosition();
   if (curPos != pos) {
     int newDirection = 1;
@@ -286,6 +324,17 @@ void moveMotorToPosition(long pos) {
   }
 }
 
+/**
+ * This function reads the temperature from the connected temperature sensor.
+ *
+ * @return void. This function does not return any value.
+ *
+ * @note The function uses the DallasTemperature library to request temperature
+ * readings from the sensor and then retrieves the temperature in Celsius using
+ * the getTempCByIndex() function. The function checks if the reading is within
+ * a valid range (between -20 and 40 degrees Celsius) and updates the
+ * lastTemperatureReading variable accordingly.
+ */
 void readTempSensor() {
  sensors.requestTemperatures();
  float reading = sensors.getTempCByIndex(0);
@@ -294,6 +343,22 @@ void readTempSensor() {
  }
 }
 
+/**
+ * This function applies temperature compensation to the motor position.
+ * It calculates the temperature difference between the last motor move and the current temperature reading.
+ * If the temperature difference is within the specified range, it applies a compensation offset to the motor position.
+ * The offset is calculated based on the temperature difference, the temperature coefficient, and the current motor position.
+ * The function then updates the current motor position, the last motor move temperature reading, and the saved position in the EEPROM.
+ *
+ * @return void. This function does not return any value.
+ *
+ * @note The function checks if the temperature difference is greater than or equal to the tempDeltaToTriggerCompensation
+ * and less than 50.00. If the condition is met, it calculates the offset using the formula:
+ * offset = (delta * tempCoefficient * 4) + stepper.currentPosition().
+ * The offset is then applied to the motor position using the moveMotorToPosition() function.
+ * After applying the offset, the function updates the current motor position, the last motor move temperature reading,
+ * and the saved position in the EEPROM using the EEPROM.put() function.
+ */
 void applyTemperatureCompensation() {
   double delta = lastMotorMoveTemperatureReading - lastTemperatureReading;
   if (abs(delta) >= tempDeltaToTriggerCompensation && abs(delta) < 50.00) {
@@ -304,17 +369,59 @@ void applyTemperatureCompensation() {
   }
 }
 
+/**
+ * Converts a hexadecimal string to a long integer.
+ *
+ * This function takes a hexadecimal string as input and converts it to a long integer.
+ * It uses the strtol() function from the C standard library to perform the conversion.
+ *
+ * @param hexstr A pointer to the hexadecimal string to be converted.
+ *
+ * @return The converted long integer.
+ *
+ * @note The function does not check if the input string is a valid hexadecimal number.
+ * It assumes that the input string is a valid hexadecimal number.
+ *
+ * @example
+ *
+ * char hexStr[] = "1234";
+ * long result = hexstr2long(hexStr);
+ * // result will be 4660
+ */
 long hexstr2long(char *hexstr) {
   long ret = 0;
   ret = strtol(hexstr, NULL, 16);
   return (ret);
 }
 
+/**
+ * @brief Configures the Big Easy Stepper Driver 1/8th step mode.
+ *
+ * This function sets the pin modes for MS1, MS2, and MS3 to OUTPUT, and writes
+ * specific values to these pins to enable the step mode on the Big Easy Driver
+ * board. It also configures the stepper motor driver with the maximum speed,
+ * enable pin, inverted pins, acceleration, and initial position.
+ * The MS1,MS2 and MS3 pins on the board are used to configure the step mode as follows:
+ * HLL = 1/2step
+ * LLL=full step
+ * HLL=1/2 step
+ * HL=1/4 step
+ * HHL=1/8 step
+ * HHH=1/16 step 
+ *
+ * @param None.
+ *
+ * @return None.
+ *
+ * @note The function assumes that the necessary board pin definitions (MS1_PIN,
+ * MS2_PIN, MS3_PIN, ENABLE_PIN) and constants (MAXSPEED, HOMEPOSITION) are
+ * already defined and initialized.
+ */
 void configureBigEasyStepperDriver() {
   pinMode(MS1_PIN, OUTPUT);
   pinMode(MS2_PIN, OUTPUT);
   pinMode(MS3_PIN, OUTPUT);
-  //Set HLL for half step mode on the big-easy-driver board. LLL=full step. HLL=1/2 step, HL=1/4 step. HHL=1/8 step. HHH=1/16 step 
+  
   digitalWrite(MS1_PIN, HIGH);
   digitalWrite(MS2_PIN, HIGH);
   digitalWrite(MS3_PIN, LOW);
@@ -326,6 +433,20 @@ void configureBigEasyStepperDriver() {
   stepper.setCurrentPosition(HOMEPOSITION);
 }
 
+/**
+ * @brief Executes the stepper motor based on the distance to go.
+ *
+ * This function checks the distance to go using the stepper's distanceToGo() method.
+ * If the distance is zero, it disables the stepper motor outputs and sets the isRunning flag to 0.
+ * Otherwise, it sets the isRunning flag to 1, runs the stepper motor, updates the millisLastMove variable,
+ * and stores the current temperature reading in the lastMotorMoveTemperatureReading variable.
+ *
+ * @param None.
+ *
+ * @return None.
+ *
+ * @note This function assumes that the stepper, millisLastMove, lastTemperatureReading, and isRunning variables are already initialized and accessible.
+ */
 void runStepper() {
   if (stepper.distanceToGo() == 0) {
     stepper.disableOutputs();
@@ -338,6 +459,20 @@ void runStepper() {
   }
 }
 
+/**
+ * @brief Handles the serial input and builds the incoming command.
+ *
+ * This function continuously reads from the serial port until an end-of-command (EOC) character is received.
+ * The EOC character is determined by the '#' character.
+ * The incoming command is built by appending characters to the 'incomingCommand' array.
+ * If the incoming command exceeds the maximum command length (MAXCOMMAND), the index is reset to MAXCOMMAND - 1.
+ *
+ * @param None.
+ *
+ * @return None.
+ *
+ * @note This function assumes that the 'Serial', 'incomingCommand', 'idx', and 'eoc' variables are already initialized and accessible.
+ */
 void handleSerialInput() {
   while (Serial.available() && !eoc) {
     inChar = Serial.read();
@@ -355,9 +490,24 @@ void handleSerialInput() {
   }
 }
 
+/**
+ * @brief Monitors for temperature changes and applies compensation if enabled.
+ *
+ * This function checks if it's time to read the temperature sensor and apply compensation.
+ * It does this by comparing the current time with the last time a temperature reading was taken.
+ * If the specified interval has passed and the motor is not currently running, it reads the temperature,
+ * stores the reading, and applies temperature compensation if enabled.
+ *
+ * @param None.
+ *
+ * @return None.
+ *
+ * @note This function assumes that the 'millis', 'millisLastTempRead', 'TEMPERATURE_POLLING_INTERVAL',
+ * 'isRunning', 'readTempSensor()', and 'tempCompEnabled' variables are already initialized and accessible.
+ */
 void monitorForTemperatureChanges() {
-  if (millis() > millisLastTempRead + 20000 && !isRunning) {
-    //Every 20sec, get temp reading, store, apply compensation
+  if (millis() > millisLastTempRead + TEMPERATURE_POLLING_INTERVAL && !isRunning) {
+    // Every 20sec, get temp reading, store, apply compensation
     millisLastTempRead = millis();
     readTempSensor();
     if (tempCompEnabled) {
